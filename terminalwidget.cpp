@@ -13,10 +13,51 @@
 #include "sshclient.h"
 #include "sshconnectionthread.h"
 #include <QApplication>
+#include <QRegularExpression>
+
+// 定义ANSI颜色转义序列映射表
+typedef struct {
+    QString colStr;
+    QColor col;
+} ColorMapping;
+
+static const ColorMapping G_colorMappings[] = {
+    {"\033[0m", QColor()}, /* Default color - will be replaced with textColor */
+    {"\033[1m", QColor()}, /* Bold - will be handled specially */
+
+    /* Standard foreground colors */
+    {"\033[30m", Qt::black},
+    {"\033[31m", Qt::red},
+    {"\033[32m", Qt::green},
+    {"\033[33m", Qt::yellow},
+    {"\033[34m", Qt::blue},
+    {"\033[35m", Qt::magenta},
+    {"\033[36m", Qt::cyan},
+    {"\033[37m", Qt::white},
+
+    /* Bright foreground colors */
+    {"\033[90m", QColor(128, 128, 128)}, /* Bright black (gray) */
+    {"\033[91m", QColor(255, 0, 0)},     /* Bright red */
+    {"\033[92m", QColor(0, 255, 0)},     /* Bright green */
+    {"\033[93m", QColor(255, 255, 0)},   /* Bright yellow */
+    {"\033[94m", QColor(0, 0, 255)},     /* Bright blue */
+    {"\033[95m", QColor(255, 0, 255)},   /* Bright magenta */
+    {"\033[96m", QColor(0, 255, 255)},   /* Bright cyan */
+    {"\033[97m", QColor(255, 255, 255)}, /* Bright white */
+
+    /* File type specific colors from 'ls' output */
+    {"\033[01;34m", QColor(0, 0, 255)},      /* Directory - bright blue */
+    {"\033[01;36m", QColor(0, 255, 255)},    /* Symlink - bright cyan */
+    {"\033[01;32m", QColor(0, 255, 0)},      /* Executable - bright green */
+    {"\033[01;35m", QColor(255, 0, 255)},    /* Image file - bright magenta */
+    {"\033[01;31m", QColor(255, 0, 0)}       /* Archive - bright red */
+};
+
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 TerminalWidget::TerminalWidget(QWidget *parent) : QWidget(parent),
     m_connected(false), m_connectionThread(nullptr),
-    historyPosition(-1), m_ansiEscapeMode(false), m_bold(false)
+    historyPosition(-1), m_ansiEscapeMode(true), m_bold(false)
 {
     // 默认终端设置
     terminalFont = QFont("Consolas", 10);
@@ -166,14 +207,14 @@ void TerminalWidget::connectToSession(const SessionInfo &sessionInfo)
     if (m_connected) {
         disconnectFromSession();
     }
-    
+
     m_host = sessionInfo.host;
     m_port = sessionInfo.port;
     m_username = sessionInfo.username;
-    
+
     // 创建连接线程
     m_connectionThread = new SSHConnectionThread(this);
-    
+
     // 手动设置连接参数
     if (sessionInfo.authType == 0) { // 0 = password authentication
         // 使用密码认证
@@ -193,14 +234,14 @@ void TerminalWidget::connectToSession(const SessionInfo &sessionInfo)
             "" // 如果需要密钥密码，这里可以添加
         );
     }
-    
+
     // 连接信号和槽
     connect(m_connectionThread, &SSHConnectionThread::connectionEstablished, this, &TerminalWidget::handleConnectionEstablished);
     connect(m_connectionThread, &SSHConnectionThread::connectionFailed, this, &TerminalWidget::handleConnectionFailed);
-    
+
     // 启动线程
     m_connectionThread->start();
-    
+
     // 显示连接信息
     appendToTerminal(tr("Connecting to %1@%2:%3...\n").arg(sessionInfo.username).arg(sessionInfo.host).arg(sessionInfo.port));
 }
@@ -219,59 +260,26 @@ void TerminalWidget::processCommand()
     // 多层次策略提取命令
     bool commandExtracted = false;
 
-    // 1. 尝试精确匹配提示符
-    if (!commandExtracted) {
-        if (currentLine.startsWith(m_currentPrompt + " ")) {
-            command = currentLine.mid(m_currentPrompt.length() + 1);
-            commandExtracted = true;
-            qDebug() << "方法1: 精确匹配提示符+空格";
-        } else if (currentLine.startsWith(m_currentPrompt)) {
-            command = currentLine.mid(m_currentPrompt.length());
-            commandExtracted = true;
-            qDebug() << "方法1: 精确匹配提示符";
-        }
+    QRegExp promptRegex("\\[[^\\]]+@[^\\]]+\\s+[^\\]]+\\][$#]\\s*");
+    if (promptRegex.indexIn(currentLine) >= 0) {
+        QString detectedPrompt = promptRegex.cap(0);
+        int promptIndex = currentLine.indexOf(detectedPrompt);
+        int commandStart = promptIndex + detectedPrompt.length();
+        command = currentLine.mid(commandStart);
+
+        // 更新当前提示符
+        commandExtracted = true;
     }
 
-    // 2. 尝试在行中查找提示符
-    if (!commandExtracted) {
-        int promptIndex = currentLine.indexOf(m_currentPrompt);
-        if (promptIndex >= 0) {
-            int commandStart = promptIndex + m_currentPrompt.length();
-            if (commandStart < currentLine.length() && currentLine.at(commandStart) == ' ') {
-                commandStart++;
-            }
-            command = currentLine.mid(commandStart);
-            commandExtracted = true;
-            qDebug() << "方法2: 在行中查找提示符";
-        }
-    }
 
-    // 3. 尝试使用正则表达式匹配常见的提示符格式
-    if (!commandExtracted) {
-        QRegExp promptRegex("\\[[^\\]]+@[^\\]]+\\s+[^\\]]+\\][$#]\\s*");
-        if (promptRegex.indexIn(currentLine) >= 0) {
-            QString detectedPrompt = promptRegex.cap(0);
-            int promptIndex = currentLine.indexOf(detectedPrompt);
-            int commandStart = promptIndex + detectedPrompt.length();
-            command = currentLine.mid(commandStart);
-
-            // 更新当前提示符
-            m_currentPrompt = detectedPrompt.trimmed();
-            commandExtracted = true;
-            qDebug() << "方法3: 正则表达式匹配提示符";
-        }
-    }
-
-    // 4. 如果所有尝试都失败，假设整行是命令
     if (!commandExtracted) {
         command = currentLine.trimmed();
-        qDebug() << "方法4: 假设整行是命令";
     }
 
-    qDebug() << "提取的命令:" << command;
+    qDebug() << "final command:" << command;
 
-        // 如果命令不为空，处理它
-        if (!command.isEmpty()) {
+    // 如果命令不为空，处理它
+    if (!command.isEmpty()) {
         // 添加到历史记录
         addToHistory(command);
 
@@ -367,32 +375,87 @@ void TerminalWidget::handleSSHData(const QByteArray &data)
 {
     // 处理接收到的数据
     QString text = QString::fromUtf8(data);
+    qDebug() << "Received data from SSH: " << text;
 
-    // 过滤掉可能导致显示问题的控制序列
-    // 过滤终端标题序列
-    int start = text.indexOf("\033]0;");
-    while (start != -1) {
-        int end = text.indexOf("\007", start);
-        if (end != -1) {
-            text.remove(start, end - start + 1);
-        } else {
+
+    // 处理 ANSI 颜色代码并添加到终端
+    QTextCursor cursor = terminalOutput->textCursor();
+    cursor.movePosition(QTextCursor::End);
+
+    // 处理可能含有多个颜色代码的文本
+    int pos = 0;
+    while (pos < text.length()) {
+        // 查找 ANSI 颜色代码
+        int escapeIndex = text.indexOf("\033[", pos);
+
+        if (escapeIndex == -1) {
+            // 没有颜色代码，直接添加剩余文本
+            cursor.insertText(text.mid(pos));
             break;
         }
-        start = text.indexOf("\033]0;", start);
-    }
 
-    // 添加到终端
-    appendToTerminal(text);
-
-    // 检测提示符
-    QRegExp promptRegex("\\[[^\\]]+@[^\\]]+\\s+[^\\]]+\\][$#]\\s*$");
-    if (promptRegex.indexIn(text) >= 0) {
-        QString detectedPrompt = promptRegex.cap(0).trimmed();
-        if (!detectedPrompt.isEmpty()) {
-            m_currentPrompt = detectedPrompt;
-            qDebug() << "检测到新提示符:" << m_currentPrompt;
+        // 添加颜色代码前的文本
+        if (escapeIndex > pos) {
+            cursor.insertText(text.mid(pos, escapeIndex - pos));
         }
+
+        // 查找颜色代码结尾的 'm'
+        int mPos = text.indexOf('m', escapeIndex);
+        if (mPos == -1) {
+            // 不完整的颜色代码，直接添加
+            cursor.insertText(text.mid(pos));
+            break;
+        }
+
+        // 提取完整的颜色代码
+        QString colorCode = text.mid(escapeIndex, mPos - escapeIndex + 1);
+
+        // 在映射表中查找匹配的颜色
+        QColor textColor = this->textColor; // 默认颜色
+        bool isBold = false;
+
+        for (size_t i = 0; i < ARRAY_SIZE(G_colorMappings); i++) {
+            if (G_colorMappings[i].colStr == colorCode) {
+                if (colorCode == "\033[1m") {
+                    // 粗体设置
+                    isBold = true;
+                } else if (colorCode == "\033[0m") {
+                    // 重置
+                    textColor = this->textColor;
+                    isBold = false;
+                } else if (G_colorMappings[i].col.isValid()) {
+                    // 设置颜色
+                    textColor = G_colorMappings[i].col;
+                }
+                break;
+            }
+        }
+
+        // 设置文本格式
+        QTextCharFormat format;
+        format.setForeground(textColor);
+        if (isBold) {
+            format.setFontWeight(QFont::Bold);
+        }
+
+        // 移动到下一个非颜色代码的文本
+        pos = mPos + 1;
+
+        // 查找下一个颜色代码或文本结尾
+        int nextEscape = text.indexOf("\033[", pos);
+        if (nextEscape == -1) {
+            nextEscape = text.length();
+        }
+
+        // 使用格式插入文本
+        cursor.insertText(text.mid(pos, nextEscape - pos), format);
+        pos = nextEscape;
     }
+
+    // 确保光标可见
+    terminalOutput->setTextCursor(cursor);
+    terminalOutput->ensureCursorVisible();
+
 }
 
 void TerminalWidget::handleSSHError(const QString &error)
@@ -634,19 +697,16 @@ void TerminalWidget::addToHistory(const QString &command)
     historyPosition = -1;
 }
 
-void TerminalWidget::appendToTerminal(const QString &text)
+void TerminalWidget::appendToTerminal(const QString &processedText)
 {
     QTextCursor cursor = terminalOutput->textCursor();
-    
+
     // Store current position
     int currentPosition = cursor.position();
-    
-    // Process ANSI escape sequences if needed
-    QString processedText = m_ansiEscapeMode ? processAnsiEscapeSequences(text) : text;
-    
+
     // Move cursor to end for appending
     cursor.movePosition(QTextCursor::End);
-    
+
     // Insert text with current formatting
     QTextCharFormat format;
     format.setForeground(m_currentFgColor);
@@ -657,13 +717,13 @@ void TerminalWidget::appendToTerminal(const QString &text)
         format.setFontWeight(QFont::Normal);
     }
     cursor.insertText(processedText, format);
-    
+
     // Restore cursor if it was in the editing area
     if (currentPosition > terminalOutput->document()->characterCount() - processedText.length()) {
         cursor.movePosition(QTextCursor::End);
         terminalOutput->setTextCursor(cursor);
     }
-    
+
     // Ensure the cursor is visible
     terminalOutput->ensureCursorVisible();
 }
@@ -689,72 +749,4 @@ void TerminalWidget::initAnsiColors()
     m_ansiColors[13] = QColor(255, 85, 255);   // Bright Magenta
     m_ansiColors[14] = QColor(85, 255, 255);   // Bright Cyan
     m_ansiColors[15] = QColor(255, 255, 255);  // Bright White
-}
-
-QString TerminalWidget::processAnsiEscapeSequences(const QString &text)
-{
-    QString result = text;
-    int escapeStart = 0;
-    
-    // Find escape sequences
-    while ((escapeStart = result.indexOf("\033[", escapeStart)) != -1) {
-        int escapeEnd = escapeStart + 2;  // Skip "\033["
-        
-        // Find the end of the escape sequence (a letter)
-        while (escapeEnd < result.length() && 
-               !result[escapeEnd].isLetter()) {
-            escapeEnd++;
-        }
-        
-        if (escapeEnd < result.length()) {
-            // We found a complete escape sequence
-            QString escapeSequence = result.mid(escapeStart, escapeEnd - escapeStart + 1);
-            QStringList parameters = escapeSequence.mid(2, escapeSequence.length() - 3).split(';');
-            
-            // Process the escape sequence based on the terminating character
-            QChar command = result[escapeEnd];
-            
-            if (command == 'm') {  // SGR - Select Graphic Rendition
-                // Handle color and text formatting
-                if (parameters.isEmpty() || parameters[0] == "0") {
-                    // Reset attributes
-                    m_currentFgColor = textColor;
-                    m_currentBgColor = backgroundColor;
-                    m_bold = false;
-                } else {
-                    for (const QString &param : parameters) {
-                        int code = param.toInt();
-                        
-                        if (code == 1) {
-                            // Bold
-                            m_bold = true;
-                        } else if (code == 22) {
-                            // Not bold
-                            m_bold = false;
-                        } else if (code >= 30 && code <= 37) {
-                            // Foreground color
-                            m_currentFgColor = m_ansiColors[code - 30];
-                        } else if (code >= 40 && code <= 47) {
-                            // Background color
-                            m_currentBgColor = m_ansiColors[code - 40];
-                        } else if (code >= 90 && code <= 97) {
-                            // Bright foreground color
-                            m_currentFgColor = m_ansiColors[code - 90 + 8];
-                        } else if (code >= 100 && code <= 107) {
-                            // Bright background color
-                            m_currentBgColor = m_ansiColors[code - 100 + 8];
-                        }
-                    }
-                }
-            }
-            
-            // Remove the escape sequence from the result
-            result.remove(escapeStart, escapeEnd - escapeStart + 1);
-        } else {
-            // Incomplete escape sequence, skip it
-            escapeStart += 2;
-        }
-    }
-    
-    return result;
 }

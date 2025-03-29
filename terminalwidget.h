@@ -84,7 +84,6 @@ private:
     void loadSettings();
     void addToHistory(const QString &command);
     void initAnsiColors();
-    QString processAnsiEscapeSequences(const QString &text);
 };
 
 #endif // TERMINALWIDGET_H
