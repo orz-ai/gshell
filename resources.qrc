@@ -1,0 +1,14 @@
+<RCC>
+    <qresource prefix="/">
+        <!-- 不再引用外部图标文件 -->
+        <file>icons/connect.svg</file>
+        <file>icons/disconnect.svg</file>
+        <file>icons/upload.svg</file>
+        <file>icons/download.svg</file>
+        <file>icons/folder.svg</file>
+        <file>icons/file.svg</file>
+        <file>icons/delete.svg</file>
+        <file>icons/refresh.svg</file>
+        <file>icons/settings.svg</file>
+    </qresource>
+</RCC> 
