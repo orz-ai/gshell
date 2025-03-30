@@ -38,6 +38,7 @@ private slots:
     void openSession(const SessionInfo &session);
     void disconnectCurrentSession();
     void showSessionManager();
+    void toggleSftpExplorer();
 
 private:
     Ui::MainWindow *ui;

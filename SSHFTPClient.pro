@@ -20,6 +20,7 @@ TEMPLATE = app
 
 SOURCES += \
     fileexplorerwidget.cpp \
+    ftpclient.cpp \
     main.cpp \
     mainwindow.cpp \
     sessiondialog.cpp \
@@ -31,6 +32,7 @@ SOURCES += \
 
 HEADERS += \
     fileexplorerwidget.h \
+    ftpclient.h \
     mainwindow.h \
     sessioninfo.h \
     sessiondialog.h \

@@ -102,6 +102,12 @@ void MainWindow::setupToolbar()
     
     mainToolBar->addSeparator();
     
+    // 添加SFTP按钮
+    QAction *sftpAction = mainToolBar->addAction(QIcon(":/icons/folder.svg"), tr("SFTP"));
+    connect(sftpAction, &QAction::triggered, this, &MainWindow::toggleSftpExplorer);
+    
+    mainToolBar->addSeparator();
+    
     QAction *settingsAction = mainToolBar->addAction(QIcon(":/icons/settings.svg"), tr("Settings"));
     connect(settingsAction, &QAction::triggered, this, &MainWindow::showSettings);
 }
@@ -139,13 +145,13 @@ void MainWindow::createNewTab(const SessionInfo &session)
     // Create terminal widget
     TerminalWidget *terminal = new TerminalWidget(tabSplitter);
     
-    // Create file explorer widget
+    // Create file explorer widget (默认隐藏)
     FileExplorerWidget *fileExplorer = new FileExplorerWidget(tabSplitter);
     
     // Add widgets to splitter
     tabSplitter->addWidget(terminal);
     tabSplitter->addWidget(fileExplorer);
-    tabSplitter->setSizes(QList<int>() << 300 << 300);
+    tabSplitter->setSizes(QList<int>() << 300 << 0);  // 初始时设置文件浏览器高度为0（隐藏）
     
     // Add the tab
     int index = tabWidget->addTab(tabSplitter, session.name);
@@ -159,6 +165,11 @@ void MainWindow::createNewTab(const SessionInfo &session)
     
     // Connect to SSH server
     terminal->connectToSession(session);
+    
+    // 连接文件浏览器的状态改变信号
+    connect(fileExplorer, &FileExplorerWidget::sftpStatusChanged, this, [=](bool /*connected*/, const QString &message) {
+        statusBar()->showMessage(message, 3000);
+    });
 }
 
 void MainWindow::closeSession(int index)
@@ -329,4 +340,57 @@ void MainWindow::connectToSessionWithKey(const QString &host, int port, const QS
     
     // Enable disconnect action
     disconnectAction->setEnabled(true);
+}
+
+void MainWindow::toggleSftpExplorer()
+{
+    if (tabWidget->count() == 0) {
+        QMessageBox::warning(this, tr("SFTP Explorer"), tr("Please connect to a session first"));
+        return;
+    }
+    
+    // 获取当前标签
+    QSplitter *tabSplitter = qobject_cast<QSplitter*>(tabWidget->currentWidget());
+    if (!tabSplitter || tabSplitter->count() < 2) {
+        return;
+    }
+    
+    // 获取文件浏览器
+    FileExplorerWidget *fileExplorer = qobject_cast<FileExplorerWidget*>(tabSplitter->widget(1));
+    if (!fileExplorer) {
+        return;
+    }
+    
+    // 获取当前会话
+    int currentIndex = tabWidget->currentIndex();
+    QString sessionName = tabWidget->tabText(currentIndex);
+    
+    // 获取会话信息
+    SessionInfo sessionInfo;
+    QList<SessionInfo> sessions = sessionManager->getSessions();
+    for (const SessionInfo &session : sessions) {
+        if (session.name == sessionName) {
+            sessionInfo = session;
+            break;
+        }
+    }
+    
+    if (sessionInfo.name.isEmpty()) {
+        QMessageBox::warning(this, tr("SFTP Explorer"), tr("Session information not found"));
+        return;
+    }
+    
+    // 切换文件浏览器可见性
+    if (fileExplorer->isVisible()) {
+        fileExplorer->hideExplorer();
+        tabSplitter->setSizes(QList<int>() << tabSplitter->height() << 0);
+    } else {
+        // 显示文件浏览器，同时连接SFTP（如果尚未连接）
+        fileExplorer->showExplorer();
+        tabSplitter->setSizes(QList<int>() << tabSplitter->height() / 2 << tabSplitter->height() / 2);
+        
+        // 连接SFTP
+        fileExplorer->connectToSftp(sessionInfo.host, sessionInfo.port, sessionInfo.username, 
+                                    sessionInfo.password.isEmpty() ? QString() : sessionInfo.password);
+    }
 } 

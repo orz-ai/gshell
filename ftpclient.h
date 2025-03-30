@@ -5,6 +5,9 @@
 #include <QString>
 #include <QFile>
 
+// Forward declaration of private class
+class FTPClientPrivate;
+
 class FTPClient : public QObject
 {
     Q_OBJECT
@@ -33,9 +36,11 @@ signals:
 
 private:
     bool m_connected;
-    void *m_session; // SFTP session
+    void *m_session; // Keep for backward compatibility
+    FTPClientPrivate *d;
     
-    // 这里将来会添加更多私有成员和方法
+    bool initLibssh2();
+    void cleanupLibssh2();
 };
 
 #endif // FTPCLIENT_H 
