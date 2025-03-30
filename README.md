@@ -3,10 +3,6 @@
 GShell is a lightweight, feature-rich SSH terminal client built with Qt framework. It provides a modern user interface for connecting to remote servers via SSH, with full support for ANSI color codes, terminal control sequences, and command history.
 
 
-
-![Snipaste_2025-03-30_18-56-05](Snipaste_2025-03-30_18-56-05.png)
-
-
 ## Features
 
 - **Secure SSH Connections**: Connect to remote servers using password or key-based authentication
@@ -18,7 +14,7 @@ GShell is a lightweight, feature-rich SSH terminal client built with Qt framewor
 
 ## Screenshots
 
-_[Screenshots of the application would be added here]_
+![Snipaste_2025-03-30_18-56-05](Snipaste_2025-03-30_18-56-05.png)
 
 ## System Requirements
 
@@ -41,7 +37,7 @@ _[Screenshots of the application would be added here]_
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/gshell.git
+git clone https://github.com/orz-ai/gshell.git
 cd gshell
 
 # Using Qt Creator
