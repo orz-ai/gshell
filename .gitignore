@@ -1,4 +1,6 @@
 .vs
 debug/
 release/
+.idea/
+*.log
 
