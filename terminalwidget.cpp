@@ -15,7 +15,6 @@
 #include <QApplication>
 #include <QRegularExpression>
 
-// 定义ANSI颜色转义序列映射表
 typedef struct {
     QString colStr;
     QColor col;
@@ -371,12 +370,41 @@ void TerminalWidget::handleCommandHistoryDown()
     terminalOutput->setTextCursor(cursor);
 }
 
+
 void TerminalWidget::handleSSHData(const QByteArray &data)
 {
     QString text = QString::fromUtf8(data);
     qDebug() << "Received data from SSH: " << text;
 
-    text.replace("\r", "");  // 过滤回车符，避免重复行
+    // 检查是否是命令回显（以命令和\r\n开头）
+    static QString lastCommand = "";
+    static bool expectingOutput = false;
+
+    if (expectingOutput && text.startsWith(lastCommand)) {
+        // Remove just the command part (not requiring \r\n which might be split in packets)
+        text = text.mid(lastCommand.length());
+
+        // If there's a leading \r\n, skip it too
+        if (text.startsWith("\r\n")) {
+            text = text.mid(2);
+        }
+
+        expectingOutput = false;
+    }
+    else if (text.endsWith("\n$ ") || text.endsWith("\n# ")) {
+        // Get the command from the prompt, more reliably
+        QRegularExpression promptRegex("\\[(.*?)\\]# $");
+        QRegularExpressionMatch match = promptRegex.match(text);
+
+        if (match.hasMatch()) {
+            // Don't store the entire text as lastCommand, just the command itself
+            expectingOutput = true;
+            // Extract just the command, not the whole prompt
+            lastCommand = match.captured(1);
+        } else {
+            expectingOutput = false;
+        }
+    }
 
     QTextCursor cursor = terminalOutput->textCursor();
     cursor.movePosition(QTextCursor::End);
@@ -384,16 +412,52 @@ void TerminalWidget::handleSSHData(const QByteArray &data)
     QTextCharFormat defaultFormat = cursor.charFormat();
     QTextCharFormat currentFormat = defaultFormat;
     QColor textColor = this->textColor;
-    QColor backgroundColor;
+    QColor backgroundColor = this->backgroundColor; // 添加默认背景色
 
     int lastPos = 0;
 
+    // 更完整的ANSI转义序列正则表达式
     QRegularExpression ansiRegex(
-        "\\x1B\\[[0-9;]*[mHJfABCDsuK]|" // ANSI 控制序列
-        "\\x1B\\]0;.*?\\x07|"           // OSC 标题
-        "\\x1B\\(B|"                    // 字符集切换
-        "\\x1B>|"                       // 模式切换
-        "\\x1B\\[\\?[0-9]*[hl]"         // 终端模式
+        // ESC序列的开始
+        "\\x1B"
+        // 后面跟着的可能模式
+        "("
+        // CSI序列 (Control Sequence Introducer) - ESC [
+        "\\["
+        // 参数部分 - 可选的数字序列，用分号分隔
+        "(?:"
+        "[\\d;:=?]+"
+        ")?"
+        // 中间字符 - 可选
+        "(?:"
+        "[ !\"#$%&'()*+,\\-./]+"
+        ")?"
+        // 终止字符 - 一个在 @ 到 ~ 范围内的字符
+        "[@A-Za-z`-~]"
+        "|"
+        // OSC序列 (Operating System Command) - ESC ]
+        "\\]"
+        // 参数和字符串内容
+        "(?:"
+        "\\d+;.*?"
+        ")"
+        // OSC终止 (BEL或ESC\)
+        "(?:"
+        "\\x07|\\x1B\\\\"
+        ")"
+        "|"
+        // 字符集选择和其他简单序列
+        "\\([0-9A-Za-z]"  // 字符集选择
+        "|"
+        // 单字符序列
+        "[A-Za-z<=>]"
+        "|"
+        // 可能的其他控制序列
+        "\\]\\d+;.*?(?:\\x07|\\x1B\\\\)"  // 通用OSC
+        "|"
+        // 任何其他以ESC开始的序列
+        ".[\\x20-\\x7E]*"
+        ")"
         );
 
     QRegularExpressionMatchIterator it = ansiRegex.globalMatch(text);
@@ -403,85 +467,200 @@ void TerminalWidget::handleSSHData(const QByteArray &data)
         int start = match.capturedStart();
         int end = match.capturedEnd();
         QString captured = match.captured(0);
-        QString codeSeq = match.captured(1);
 
+        // 输出匹配到的ANSI之前的普通文本
         QString plainText = text.mid(lastPos, start - lastPos);
         if (!plainText.isEmpty()) {
             cursor.insertText(plainText, currentFormat);
         }
 
-        if (captured == "\x1B[H" || captured == "\x1B[2J") {
-            terminalOutput->clear(); // 清屏
+        // 处理特殊的ANSI序列
+        if (captured.startsWith("\x1B[?")) {
+            // 处理私有模式设置，如 \x1B[?25l 隐藏光标
+            lastPos = end;
+            continue;
+        } else if (captured == "\x1B=" || captured == "\x1B>") {
+            // 处理应用键盘模式
+            lastPos = end;
+            continue;
+        } else if (captured == "\x1B[H") {
+            // 光标移动到Home位置
+            // 在简单实现中可以等同于清屏
+            terminalOutput->clear();
             cursor = terminalOutput->textCursor();
             lastPos = end;
-        } else if (captured == "\x1B(K" || captured.startsWith("\x1B[")) {
-            lastPos = end; // 忽略 ANSI 码
-        } else if (captured.endsWith("m")) {
-            QStringList codes = codeSeq.isEmpty() ? QStringList("") : codeSeq.split(";");
+            continue;
+        } else if (captured == "\x1B[2J") {
+            // 清屏
+            terminalOutput->clear();
+            cursor = terminalOutput->textCursor();
+            lastPos = end;
+            continue;
+        } else if (captured == "\x1B[K") {
+            // 清除从光标到行尾的内容
+            // 在简化实现中我们忽略这个
+            lastPos = end;
+            continue;
+        } else if (captured.startsWith("\x1B[") && captured.endsWith("m")) {
+            // 处理SGR (Select Graphic Rendition) 参数
+            QString paramPart = captured.mid(2, captured.length() - 3);
+            QStringList codes = paramPart.isEmpty() ? QStringList("0") : paramPart.split(";");
+
             for (const QString &code : codes) {
                 bool ok;
                 int value = code.toInt(&ok);
-                if (!ok && code.isEmpty()) value = 0; // \x1B[m 等同于 \x1B[0m
+                if (!ok && code.isEmpty()) {
+                    value = 0;  // \x1B[m 等同于 \x1B[0m
+                }
 
                 switch (value) {
-                case 0: // 重置样式
-                    currentFormat = defaultFormat;
-                    textColor = this->textColor;
-                    backgroundColor = QColor();
-                    currentFormat.setForeground(textColor);
-                    currentFormat.setBackground(QBrush());
-                    currentFormat.setFontWeight(QFont::Normal);
-                    currentFormat.setFontUnderline(false);
-                    break;
-                case 1: // 加粗
-                    currentFormat.setFontWeight(QFont::Bold);
-                    break;
-                case 4: // 下划线
-                    currentFormat.setFontUnderline(true);
-                    break;
-                case 7: // 反显
-                    currentFormat.setBackground(textColor);
-                    currentFormat.setForeground(backgroundColor.isValid() ? backgroundColor : this->textColor);
-                    break;
-                case 39: // 重置前景色
-                    textColor = this->textColor;
-                    currentFormat.setForeground(textColor);
-                    break;
-                case 49: // 重置背景色
-                    backgroundColor = QColor();
-                    currentFormat.setBackground(QBrush());
-                    break;
-                // 标准前景色 (30-37)
-                case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
-                    textColor = G_colorMappings[value - 30 + 2].col;
-                    currentFormat.setForeground(textColor);
-                    break;
-                // 标准背景色 (40-47)
-                case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47:
-                    backgroundColor = G_colorMappings[value - 40 + 10].col;
-                    currentFormat.setBackground(backgroundColor);
-                    break;
-                // 亮色前景 (90-97)
-                case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
-                    textColor = G_colorMappings[value - 90 + 10].col;
-                    currentFormat.setForeground(textColor);
-                    break;
-                // 亮色背景 (100-107)
-                case 100: case 101: case 102: case 103: case 104: case 105: case 106: case 107:
-                    backgroundColor = G_colorMappings[value - 100 + 18].col;
-                    currentFormat.setBackground(backgroundColor);
-                    break;
-                default:
-                    qDebug() << "Unhandled ANSI code:" << value;
-                    break;
+                    case 0: // 重置所有属性
+                        currentFormat = defaultFormat;
+                        textColor = this->textColor;
+                        backgroundColor = this->backgroundColor;
+                        currentFormat.setForeground(textColor);
+                        currentFormat.setBackground(backgroundColor);
+                        currentFormat.setFontWeight(QFont::Normal);
+                        currentFormat.setFontItalic(false);
+                        currentFormat.setFontUnderline(false);
+                        break;
+                    case 1: // 加粗
+                        currentFormat.setFontWeight(QFont::Bold);
+                        break;
+                    case 3: // 斜体
+                        currentFormat.setFontItalic(true);
+                        break;
+                    case 4: // 下划线
+                        currentFormat.setFontUnderline(true);
+                        break;
+                    case 7: // 反显
+                    {
+                        QColor temp = textColor;
+                        textColor = backgroundColor.isValid() ? backgroundColor : this->backgroundColor;
+                        backgroundColor = temp;
+                        currentFormat.setForeground(textColor);
+                        currentFormat.setBackground(backgroundColor);
+                        break;
+                    }
+                    case 22: // 取消加粗
+                        currentFormat.setFontWeight(QFont::Normal);
+                        break;
+                    case 23: // 取消斜体
+                        currentFormat.setFontItalic(false);
+                        break;
+                    case 24: // 取消下划线
+                        currentFormat.setFontUnderline(false);
+                        break;
+                    case 27: // 取消反显
+                    {
+                        QColor temp = backgroundColor;
+                        backgroundColor = textColor;
+                        textColor = temp;
+                        currentFormat.setForeground(textColor);
+                        currentFormat.setBackground(backgroundColor);
+                        break;
+                    }
+                    case 39: // 默认前景色
+                        textColor = this->textColor;
+                        currentFormat.setForeground(textColor);
+                        break;
+                    case 49: // 默认背景色
+                        backgroundColor = this->backgroundColor;
+                        currentFormat.setBackground(backgroundColor);
+                        break;
+
+                        // 标准前景色 (30-37)
+                    case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
+                        textColor = G_colorMappings[value - 30].col;
+                        currentFormat.setForeground(textColor);
+                        break;
+
+                        // 标准背景色 (40-47)
+                    case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47:
+                        backgroundColor = G_colorMappings[value - 40].col;
+                        currentFormat.setBackground(backgroundColor);
+                        break;
+
+                        // 亮色前景 (90-97)
+                    case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
+                        textColor = G_colorMappings[value - 90 + 8].col; // 亮色索引偏移8
+                        currentFormat.setForeground(textColor);
+                        break;
+
+                        // 亮色背景 (100-107)
+                    case 100: case 101: case 102: case 103: case 104: case 105: case 106: case 107:
+                        backgroundColor = G_colorMappings[value - 100 + 8].col; // 亮色索引偏移8
+                        currentFormat.setBackground(backgroundColor);
+                        break;
+
+                        // 8位颜色支持 (38;5;n 和 48;5;n)
+                    case 38:
+                        if (codes.size() > 2 && codes[1] == "5") {
+                            int colorCode = codes[2].toInt(&ok);
+                            if (ok && colorCode >= 0 && colorCode < 256) {
+                                // 转换8位颜色到RGB
+                                if (colorCode < 16) {
+                                    // 使用基本16色
+                                    textColor = G_colorMappings[colorCode % 16].col;
+                                } else if (colorCode < 232) {
+                                    // 使用6x6x6色彩立方体
+                                    int r = (colorCode - 16) / 36 * 51;
+                                    int g = ((colorCode - 16) % 36) / 6 * 51;
+                                    int b = ((colorCode - 16) % 6) * 51;
+                                    textColor = QColor(r, g, b);
+                                } else {
+                                    // 使用灰度色调
+                                    int gray = (colorCode - 232) * 10 + 8;
+                                    textColor = QColor(gray, gray, gray);
+                                }
+                                currentFormat.setForeground(textColor);
+                            }
+                        }
+                        break;
+                    case 48:
+                        if (codes.size() > 2 && codes[1] == "5") {
+                            int colorCode = codes[2].toInt(&ok);
+                            if (ok && colorCode >= 0 && colorCode < 256) {
+                                // 转换8位颜色到RGB
+                                if (colorCode < 16) {
+                                    // 使用基本16色
+                                    backgroundColor = G_colorMappings[colorCode % 16].col;
+                                } else if (colorCode < 232) {
+                                    // 使用6x6x6色彩立方体
+                                    int r = (colorCode - 16) / 36 * 51;
+                                    int g = ((colorCode - 16) % 36) / 6 * 51;
+                                    int b = ((colorCode - 16) % 6) * 51;
+                                    backgroundColor = QColor(r, g, b);
+                                } else {
+                                    // 使用灰度色调
+                                    int gray = (colorCode - 232) * 10 + 8;
+                                    backgroundColor = QColor(gray, gray, gray);
+                                }
+                                currentFormat.setBackground(backgroundColor);
+                            }
+                        }
+                        break;
+
+                    default:
+                        qDebug() << "Unhandled ANSI code:" << value;
+                        break;
                 }
             }
             lastPos = end;
+        } else if (captured.startsWith("\x1B]0;") && captured.endsWith("\x07")) {
+            // 设置终端标题
+            QString title = captured.mid(4, captured.length() - 5);
+            // 如果需要，这里可以发出信号更新窗口标题
+            // emit titleChanged(title);
+            lastPos = end;
         } else {
+            // 其他未处理的ANSI序列
+            qDebug() << "Unhandled ANSI sequence:" << captured;
             lastPos = end;
         }
     }
 
+    // 处理剩余的普通文本
     QString remainingText = text.mid(lastPos);
     if (!remainingText.isEmpty()) {
         cursor.insertText(remainingText, currentFormat);
@@ -490,7 +669,6 @@ void TerminalWidget::handleSSHData(const QByteArray &data)
     terminalOutput->setTextCursor(cursor);
     terminalOutput->ensureCursorVisible();
 }
-
 
 
 void TerminalWidget::handleSSHError(const QString &error)

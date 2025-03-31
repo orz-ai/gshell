@@ -1,4 +1,4 @@
-#ifndef FILEEXPLORERWIDGET_H
+﻿#ifndef FILEEXPLORERWIDGET_H
 #define FILEEXPLORERWIDGET_H
 
 #include <QWidget>
@@ -21,7 +21,6 @@
 #include <QMap>
 #include "ftpclient.h"
 
-// 传输任务结构体
 struct TransferTask {
     enum Type { Upload, Download };
     
@@ -84,7 +83,6 @@ private slots:
     void startLocalItemDrag();
     void startRemoteItemDrag();
     
-    // 新增：传输进度更新
     void onTransferProgress(qint64 bytesSent, qint64 bytesTotal);
     void onTransferCompleted();
     void clearCompletedTransfers();
@@ -108,18 +106,17 @@ private:
     bool isLocalDragSource;
     
     QPoint dragStartPosition;
-    
-    // 新增：传输管理相关成员
-    QSplitter *mainSplitter;      // 分隔文件浏览器和传输面板
-    QWidget *transferWidget;      // 传输面板
-    QListWidget *transferList;    // 传输任务列表
-    QMap<int, TransferTask> transferTasks;  // 传输任务映射表
-    int nextTaskId;              // 下一个任务ID
-    int currentTaskId;           // 当前正在传输的任务ID
+
+    QSplitter *mainSplitter;
+    QWidget *transferWidget;
+    QListWidget *transferList;
+    QMap<int, TransferTask> transferTasks;
+    int nextTaskId;
+    int currentTaskId;
     
     void setupUI();
     void setupToolbar();
-    void setupTransferPanel();  // 新增：设置传输面板
+    void setupTransferPanel();
     void populateRemoteView(const QStringList &entries);
     void changeSftpDirectory(const QString &path);
     void changeLocalDirectory(const QString &path);
@@ -128,7 +125,6 @@ private:
     void uploadLocalFile(const QString &localPath, const QString &remotePath);
     void downloadRemoteFile(const QString &remotePath, const QString &localPath);
     
-    // 新增：传输任务管理
     int addTransferTask(const QString &localPath, const QString &remotePath, TransferTask::Type type);
     void updateTransferProgress(int taskId, qint64 transferred, qint64 total);
     void completeTransferTask(int taskId, bool success = true, const QString &errorMessage = QString());

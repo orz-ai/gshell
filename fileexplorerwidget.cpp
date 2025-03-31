@@ -1094,7 +1094,7 @@ void FileExplorerWidget::updateTransferListItem(int taskId)
     }
 }
 
-// 新增：完成传输任务
+
 void FileExplorerWidget::completeTransferTask(int taskId, bool success, const QString &errorMessage)
 {
     if (!transferTasks.contains(taskId))
@@ -1105,7 +1105,7 @@ void FileExplorerWidget::completeTransferTask(int taskId, bool success, const QS
     task.error = !success;
     task.errorMessage = errorMessage;
     
-    // 如果是上传文件完成，刷新远程目录
+    // complete upload, refresh remote dir
     if (success && task.type == TransferTask::Upload) {
         ftpClient->listDirectory(currentRemotePath);
     }
@@ -1113,10 +1113,10 @@ void FileExplorerWidget::completeTransferTask(int taskId, bool success, const QS
     updateTransferListItem(taskId);
 }
 
-// 新增：处理下一个传输任务
+
 void FileExplorerWidget::processNextTransfer()
 {
-    // 找到队列中下一个未完成的任务
+    // find next uncmplete task
     int nextTaskId = -1;
     
     for (auto it = transferTasks.begin(); it != transferTasks.end(); ++it) {
@@ -1148,7 +1148,6 @@ void FileExplorerWidget::processNextTransfer()
     }
 }
 
-// 新增：传输进度更新处理
 void FileExplorerWidget::onTransferProgress(qint64 bytesSent, qint64 bytesTotal)
 {
     if (currentTaskId != -1) {
@@ -1156,36 +1155,28 @@ void FileExplorerWidget::onTransferProgress(qint64 bytesSent, qint64 bytesTotal)
     }
 }
 
-// 新增：传输完成处理
+
 void FileExplorerWidget::onTransferCompleted()
 {
     if (currentTaskId != -1) {
         completeTransferTask(currentTaskId, true);
-        
-        // 记录完成的任务ID
-        int completedTaskId = currentTaskId;
         currentTaskId = -1;
         
-        // 处理下一个任务
         processNextTransfer();
     }
 }
 
-// 新增：清除已完成的传输记录
 void FileExplorerWidget::clearCompletedTransfers()
 {
     QList<int> tasksToRemove;
     
-    // 找出所有已完成的任务
     for (auto it = transferTasks.begin(); it != transferTasks.end(); ++it) {
         if (it.value().completed) {
             tasksToRemove.append(it.key());
         }
     }
     
-    // 从列表和映射中删除任务
     for (int taskId : tasksToRemove) {
-        // 从列表中删除
         for (int i = 0; i < transferList->count(); ++i) {
             QListWidgetItem *item = transferList->item(i);
             if (item->data(Qt::UserRole).toInt() == taskId) {
@@ -1194,12 +1185,11 @@ void FileExplorerWidget::clearCompletedTransfers()
             }
         }
         
-        // 从映射中删除
         transferTasks.remove(taskId);
     }
 }
 
-// 新增：取消传输
+
 void FileExplorerWidget::cancelTransfer()
 {
     // 获取当前选择的项
